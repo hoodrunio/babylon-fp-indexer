@@ -3,3 +3,9 @@ babylon-point.json
 .env
 babylon-point-2.json
 tx-structure.md
+babylon-stake-analysis.json
+babylon-transactions.json
+parameterparser.go
+parameters.md
+system-architecture.mermaid
+__pycache__/bech32.cpython-310.pyc
