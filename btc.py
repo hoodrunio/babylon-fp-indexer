@@ -76,31 +76,51 @@ class BabylonStakeIndexer:
             if not parsed_data:
                 return None
                 
-            # For debugging
-            print(f"\nOP_RETURN Parse for tx {tx['txid']}:")
-            print(f"Full data: {op_return_data}")
-            print(f"Random bytes: {parsed_data['random_data']}")
-            print(f"FP Address: {parsed_data['finality_provider']}")
-            print(f"Suffix: {parsed_data['suffix']}")
+            # Block info - check both possible locations
+            block_height = None
+            if 'block' in tx and 'height' in tx['block']:
+                block_height = tx['block']['height']
+            elif 'height' in tx:
+                block_height = tx['height']
             
-            # Third output is change address
+            # Timestamp - check both possible locations
+            timestamp = None
+            if 'time' in tx:
+                timestamp = tx['time']
+            elif 'blocktime' in tx:
+                timestamp = tx['blocktime']
+            
+            # Address info
+            stake_script = stake_output.get('scriptPubKey', {})
+            stake_address = None
+            if 'address' in stake_script:
+                stake_address = stake_script['address']
+            elif 'addresses' in stake_script and stake_script['addresses']:
+                stake_address = stake_script['addresses'][0]
+            
+            # Change address
             change_output = vout[2]
+            change_script = change_output.get('scriptPubKey', {})
+            change_address = None
+            if 'address' in change_script:
+                change_address = change_script['address']
+            elif 'addresses' in change_script and change_script['addresses']:
+                change_address = change_script['addresses'][0]
             
             return {
                 'txid': tx['txid'],
-                'block_height': tx.get('height'),
-                'timestamp': tx.get('time'),
+                'block_height': block_height,
+                'timestamp': timestamp,
                 'stake_amount': stake_output.get('value', 0),
-                'staker_address': stake_output.get('scriptPubKey', {}).get('addresses', [None])[0],
-                'change_address': change_output.get('scriptPubKey', {}).get('addresses', [None])[0],
+                'staker_address': stake_address,
+                'change_address': change_address,
                 'finality_provider': parsed_data['finality_provider'],
                 'op_return': parsed_data,
-                'is_babylon_stake': True,
-                'raw_tx': tx
+                'is_babylon_stake': True
             }
             
         except Exception as e:
-            print(f"Error analyzing transaction: {str(e)}")
+            print(f"Error analyzing transaction: {str(e)} - TX: {tx.get('txid', 'unknown')}")
             return None
     
     def scan_blocks(self, start_height, end_height, batch_size=10):
@@ -193,13 +213,14 @@ class BabylonStakeIndexer:
                 'total_stake_btc': fp_info['total_stake'] / 100000000,
                 'unique_stakers_count': len(fp_info['unique_stakers']),
                 'transaction_count': len(fp_info['transactions']),
-                'transactions': [{
+                'transactions': sorted([{
                     'txid': tx['txid'],
-                    'block_height': tx['block_height'],
-                    'timestamp': tx['timestamp'],
+                    'block_height': tx['block_height'] if tx['block_height'] is not None else 'unknown',
+                    'timestamp': tx['timestamp'] if tx['timestamp'] is not None else 'unknown',
                     'stake_amount_btc': tx['stake_amount'] / 100000000,
-                    'staker_address': tx['staker_address']
-                } for tx in fp_info['transactions']]
+                    'staker_address': tx['staker_address'] if tx['staker_address'] is not None else 'unknown'
+                } for tx in fp_info['transactions']], 
+                key=lambda x: x['block_height'] if x['block_height'] != 'unknown' else float('inf'))
             }
         
         # Write results to file
@@ -254,12 +275,12 @@ class BabylonStakeIndexer:
             print(f"Error debugging transaction: {str(e)}")
             return None
 
-# Usage
 indexer = BabylonStakeIndexer()
 
-# Scan last 50 blocks
+# Get scan range from env or use default
+scan_range = int(os.getenv('SCAN_RANGE', '50'))
 target_height = indexer._rpc_call('getblockcount', [])
-start_height = target_height - 50
+start_height = target_height - scan_range 
 end_height = target_height
 
 print(f"Scanning blocks: {start_height} - {end_height}")
