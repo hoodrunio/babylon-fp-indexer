@@ -26,34 +26,37 @@ class BabylonStakeIndexer:
     
     def parse_op_return(self, hex_data):
         """
-        Parses OP_RETURN data and extracts FP address
+        Parses Babylon stake OP_RETURN data according to specification
+        Format: 0x6a || 0x47 || Tag || Version || StakerPK || FinalityProviderPK || StakingTime
         """
-        # Check prefix
-        if not hex_data.startswith('6a4762626e31'):
+        # Check prefix (0x6a = OP_RETURN, 0x47 = PUSH71)
+        if not hex_data.startswith('6a47'):
             return None
         
-        # Remove prefix
-        data = hex_data[10:]
+        # Remove OP_RETURN and PUSH prefixes
+        data = hex_data[4:]
         
-        # Split into 64 character chunks
-        chunks = [data[i:i+64] for i in range(0, len(data), 64)]
-        if len(chunks) < 3:
+        # Parse fields
+        try:
+            tag = data[:8]  # 4 bytes
+            version = data[8:10]  # 1 byte
+            staker_pk = data[10:74]  # 32 bytes
+            fp_pk = data[74:138]  # 32 bytes
+            staking_time = data[138:142]  # 2 bytes
+            
+            return {
+                'prefix': '6a47',
+                'tag': tag,
+                'version': version,
+                'staker_public_key': staker_pk,
+                'finality_provider': fp_pk,
+                'staking_time': staking_time,
+                'raw_data': hex_data
+            }
+            
+        except Exception as e:
+            print(f"Error parsing OP_RETURN data: {str(e)}")
             return None
-        
-        # FP address: last 60 chars of chunk1 + first 4 chars of chunk2
-        fp_address = chunks[1][-60:] + chunks[2][:4]
-        
-        # Check suffix
-        if not chunks[2][4:] == 'fa00':
-            return None
-        
-        return {
-            'prefix': '6a4762626e31',
-            'random_data': chunks[0],
-            'finality_provider': fp_address,
-            'suffix': 'fa00',
-            'raw_data': hex_data
-        }
     
     def get_block_height(self, blockhash):
         """
@@ -64,31 +67,35 @@ class BabylonStakeIndexer:
     
     def get_transaction_info(self, tx):
         """
-        Analyzes each transaction in detail and detects Babylon stake transactions
+        Analyzes transaction according to Babylon stake specification
         """
         try:
             vout = tx.get('vout', [])
             if len(vout) != 3:  # Must have exactly 3 outputs
                 return None
-                
-            # First output contains stake amount (convert from BTC to satoshi)
+            
+            # First output must be Taproot output with stake amount
             stake_output = vout[0]
+            if stake_output['scriptPubKey'].get('type') != 'witness_v1_taproot':
+                return None
             stake_amount = int(stake_output['value'] * 100000000)  # BTC to satoshi
             
             # Second output must be OP_RETURN
             op_return_output = vout[1]
+            if op_return_output['scriptPubKey'].get('type') != 'nulldata':
+                return None
             op_return_data = op_return_output['scriptPubKey']['hex']
             
             # Parse OP_RETURN data
             parsed_data = self.parse_op_return(op_return_data)
             if not parsed_data:
                 return None
-                
-            # Get block info directly from tx
+            
+            # Get block info from tx
             block_height = tx.get('block_height')
             timestamp = tx.get('blocktime')
             
-            # Get staker address from last output
+            # Get staker address from last output (change address)
             staker_output = vout[2]
             staker_address = staker_output['scriptPubKey'].get('address')
             
@@ -98,7 +105,9 @@ class BabylonStakeIndexer:
                 'timestamp': timestamp,
                 'stake_amount': stake_amount,
                 'staker_address': staker_address,
+                'staker_public_key': parsed_data['staker_public_key'],
                 'finality_provider': parsed_data['finality_provider'],
+                'staking_time': parsed_data['staking_time'],
                 'op_return': parsed_data,
                 'is_babylon_stake': True
             }
