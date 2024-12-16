@@ -55,6 +55,13 @@ class BabylonStakeIndexer:
             'raw_data': hex_data
         }
     
+    def get_block_height(self, blockhash):
+        """
+        Gets block height from block hash
+        """
+        block = self._rpc_call('getblock', [blockhash])
+        return block['height']
+    
     def get_transaction_info(self, tx):
         """
         Analyzes each transaction in detail and detects Babylon stake transactions
@@ -64,56 +71,33 @@ class BabylonStakeIndexer:
             if len(vout) != 3:  # Must have exactly 3 outputs
                 return None
                 
-            # First output contains stake amount
+            # First output contains stake amount (convert from BTC to satoshi)
             stake_output = vout[0]
+            stake_amount = int(stake_output['value'] * 100000000)  # BTC to satoshi
             
             # Second output must be OP_RETURN
             op_return_output = vout[1]
-            op_return_data = op_return_output.get('scriptPubKey', {}).get('hex', '')
+            op_return_data = op_return_output['scriptPubKey']['hex']
             
             # Parse OP_RETURN data
             parsed_data = self.parse_op_return(op_return_data)
             if not parsed_data:
                 return None
                 
-            # Block info - check both possible locations
-            block_height = None
-            if 'block' in tx and 'height' in tx['block']:
-                block_height = tx['block']['height']
-            elif 'height' in tx:
-                block_height = tx['height']
+            # Get block info directly from tx
+            block_height = tx.get('block_height')
+            timestamp = tx.get('blocktime')
             
-            # Timestamp - check both possible locations
-            timestamp = None
-            if 'time' in tx:
-                timestamp = tx['time']
-            elif 'blocktime' in tx:
-                timestamp = tx['blocktime']
-            
-            # Address info
-            stake_script = stake_output.get('scriptPubKey', {})
-            stake_address = None
-            if 'address' in stake_script:
-                stake_address = stake_script['address']
-            elif 'addresses' in stake_script and stake_script['addresses']:
-                stake_address = stake_script['addresses'][0]
-            
-            # Change address
-            change_output = vout[2]
-            change_script = change_output.get('scriptPubKey', {})
-            change_address = None
-            if 'address' in change_script:
-                change_address = change_script['address']
-            elif 'addresses' in change_script and change_script['addresses']:
-                change_address = change_script['addresses'][0]
+            # Get staker address from last output
+            staker_output = vout[2]
+            staker_address = staker_output['scriptPubKey'].get('address')
             
             return {
                 'txid': tx['txid'],
                 'block_height': block_height,
                 'timestamp': timestamp,
-                'stake_amount': stake_output.get('value', 0),
-                'staker_address': stake_address,
-                'change_address': change_address,
+                'stake_amount': stake_amount,
+                'staker_address': staker_address,
                 'finality_provider': parsed_data['finality_provider'],
                 'op_return': parsed_data,
                 'is_babylon_stake': True
@@ -145,6 +129,11 @@ class BabylonStakeIndexer:
                     block = self._rpc_call('getblock', [block_hash, 2])
                     
                     for tx in block['tx']:
+                        # Add block information to transaction
+                        tx['blockhash'] = block['hash']
+                        tx['block_height'] = block['height']
+                        tx['blocktime'] = block['time']
+                        
                         tx_info = self.get_transaction_info(tx)
                         if tx_info:
                             print(f"\nStake transaction found: {tx_info['txid']}")
